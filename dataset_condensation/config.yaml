@@ -1,0 +1,28 @@
+method: DC          # 方法: DC (Gradient Matching) 或 DSA
+dataset: MNIST      # 数据集: MNIST, FashionMNIST, SVHN, CIFAR10, CIFAR100
+model: LeNet        # 用于蒸馏和评估的模型: MLP, ConvNet, LeNet, AlexNet, VGG11, ResNet18
+ipc: 10             # 每类合成图像数
+eval_mode: S        # 评估模式: S (self), M (multi-arch), W, D, A, P, N
+num_exp: 5          # 独立实验次数
+num_eval: 20        # 每次评估时训练模型的数量
+epoch_eval_train: 300 # 评估时每个模型的训练周期数
+Iteration: 1000     # 蒸馏总迭代次数
+lr_img: 0.1         # 合成图像的学习率
+lr_net: 0.01        # 网络的学习率
+batch_real: 256     # 真实数据的批大小
+batch_train: 256    # 评估/网络训练时的批大小
+init: noise         # 合成图像初始化方式: noise 或 real
+dsa_strategy: None  # DSA 策略 (DC 方法下应为 None)
+data_path: data     # 数据集存储路径
+save_path: result   # 结果保存路径
+dis_metric: ours    # 梯度距离度量: ours, mse, cos
+
+# DC 方法在评估时使用的 (不可微) 数据增强参数
+dc_augmentation:
+    strategy: 'crop_scale_rotate' # 增强策略组合 (对应 MNIST 的默认设置)
+    # strategy: 'crop_noise'     # (对应 ConvNetBN 的设置)
+    # strategy: 'none'          # 不进行增强
+    crop: 4                     # 裁剪像素数
+    scale: 0.2                  # 缩放比例因子
+    rotate: 45                  # 旋转角度范围 (+/-)
+    noise: 0.001                # 添加的高斯噪声标准差

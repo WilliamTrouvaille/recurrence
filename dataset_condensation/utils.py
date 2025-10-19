@@ -7,12 +7,15 @@ Created on 2025/10/18 13:05
 @function: 工具类
 """
 import os
+import sys
 import time
+import yaml
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
@@ -393,7 +396,7 @@ def epoch(mode, dataloader, net, optimizer, criterion, device, aug, dc_aug_param
             #      仅适用于复现 DC (Gradient Matching) 论文。
             if dc_aug_param is None:
                 # 如果没有提供增强参数，可以抛出错误或跳过增强
-                exit("Warning: aug is True but dc_aug_param is None. Skipping augmentation.")
+                logger.warning("Warning: aug is True but dc_aug_param is None. Skipping augmentation.")
             else:
                 img = augment(img, dc_aug_param, device=device)  # augment 函数本身也接收 device 参数
 
@@ -507,7 +510,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args):
 
     time_train = time.time() - start
     loss_test, acc_test = epoch('test', testloader, net, optimizer, criterion, args, aug=False)
-    print('%s Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
+    logger.success('%s Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
         get_time(), it_eval, Epoch, int(time_train), loss_train, acc_train, acc_test))
 
     return net, acc_train, acc_test
@@ -530,7 +533,7 @@ def get_eval_pool(eval_mode, model, model_eval):
         model_eval_pool = ['ConvNetNN', 'ConvNetBN', 'ConvNetLN', 'ConvNetIN', 'ConvNetGN']
     elif eval_mode == 'S':  # itself
         if 'BN' in model:
-            print(
+            logger.warning(
                 'Attention: Here I will replace BN with IN in evaluation, as the synthetic set is too small to measure BN hyper-parameters.')
         model_eval_pool = [model[:model.index('BN')]] if 'BN' in model else [model]
     elif eval_mode == 'SS':  # itself
@@ -538,6 +541,7 @@ def get_eval_pool(eval_mode, model, model_eval):
     else:
         model_eval_pool = [model_eval]
     return model_eval_pool
+
 
 # -----------------------------------------------------------------
 # MARK: - 辅助函数
@@ -565,3 +569,114 @@ def get_daparam(dataset, model, model_eval, ipc):
         dc_aug_param['strategy'] = 'crop_noise'
 
     return dc_aug_param
+
+
+# --- Loguru 日志配置函数 ---
+
+# 定义一个全局变量来跟踪日志是否已被配置
+_logger_configured = False
+
+
+def setup_logger(log_dir="logs", log_level="INFO"):
+    """
+    配置 loguru 日志记录器，使其输出到控制台和文件。
+    这个函数应该只在程序入口处被调用一次。
+
+    Args:
+        log_dir (str): 保存日志文件的目录。默认为 "logs"。
+        log_level (str): 输出的最低日志级别。默认为 "INFO"。
+                      可选值: "TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"。
+    """
+    global _logger_configured
+    # 检查是否已经配置过，防止重复添加 handlers
+    if _logger_configured:
+        logger.warning("日志记录器已经被配置过，跳过重复配置。")
+        return
+
+    # 1. (可选但推荐) 移除默认的 loguru handler
+    try:
+        logger.remove(0)
+    except ValueError:
+        pass  # Handler 0 不存在，没关系
+
+    # 2. 定义期望的日志格式
+    log_format = (
+        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+    )
+
+    # 3. 添加控制台 (stderr) 输出 sink
+    logger.add(
+        sys.stderr,  # 输出到标准错误流
+        level=log_level.upper(),  # 控制台输出的最低级别 (确保是大写)
+        format=log_format,  # 使用定义的格式
+        colorize=True  # 在控制台中启用彩色输出
+    )
+
+    # 4. 确保日志目录存在
+    os.makedirs(log_dir, exist_ok=True)
+
+    # 5. 定义日志文件路径 (使用 rotation 来创建新文件)
+    log_file_path = os.path.join(log_dir, "{time:YYYYMMDD_HHmmss}.log")
+
+    # 6. 添加文件输出 sink
+    logger.add(
+        log_file_path,  # 文件路径模式
+        level=log_level.upper(),  # 文件输出的最低级别 (确保是大写)
+        format=log_format,  # 使用相同的定义格式
+        rotation="10 MB",  # 当日志文件达到 10 MB 时进行轮转
+        retention="10 days",  # 最多保留最近 10 天的日志文件
+        encoding="utf-8",  # 指定文件编码
+        enqueue=True,  # 启用异步日志记录
+        backtrace=True,  # 显示完整的堆栈跟踪
+        diagnose=True  # 提供更详细的错误诊断信息
+    )
+
+    _logger_configured = True  # 标记为已配置
+    logger.info(f"Loguru 日志记录器配置完成。日志级别: {log_level.upper()}。将输出到控制台和 '{log_dir}' 目录下的文件。")
+# --- 日志配置函数结束 ---
+
+# --- 配置加载部分开始 ---
+def load_config(config_path="config.yaml"):
+    """
+    加载 YAML 配置文件。
+
+    Args:
+        config_path (str): YAML 配置文件的路径。默认为当前目录下的 "config.yaml"。
+
+    Returns:
+        dict: 包含配置参数的字典。如果文件不存在或解析失败，则返回 None。
+    """
+    resolved_path = os.path.abspath(config_path) # 获取绝对路径，方便日志记录
+    logger.info(f"尝试从 '{resolved_path}' 加载配置...")
+
+    if not os.path.exists(resolved_path):
+        logger.error(f"配置文件未找到: {resolved_path}")
+        return None
+
+    try:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) # 使用 safe_load 防止执行任意代码
+        logger.success(f"成功加载配置文件: {resolved_path}")
+        # 使用 DEBUG 级别选择性地打印加载的配置内容
+        logger.debug(f"加载的配置内容: {config}")
+        return config
+    except yaml.YAMLError as e:
+        logger.error(f"解析 YAML 文件时出错: {resolved_path}\n错误详情: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"加载配置文件时发生未知错误: {resolved_path}\n错误详情: {e}")
+        return None
+
+class ConfigNamespace:
+    def __init__(self, config_dict):
+        # 将字典的键值对设置为对象的属性
+        for key, value in config_dict.items():
+            setattr(self, key, value)
+
+    def __repr__(self):
+        # 定义对象的打印形式，方便日志记录
+        return str(vars(self))
+
+# --- 配置加载部分结束 ---
