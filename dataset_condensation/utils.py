@@ -9,12 +9,12 @@ Created on 2025/10/18 13:05
 import os
 import sys
 import time
-import yaml
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from loguru import logger
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from torch.utils.data import Dataset
@@ -493,7 +493,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args):
     images_train = images_train.to(args.device)
     labels_train = labels_train.to(args.device)
     lr = float(args.lr_net)
-    Epoch = int(args.epoch_eval_train)
+    Epoch = int(args.epoch_eval_train)  # 从 args 获取 epoch 数
     lr_schedule = [Epoch // 2 + 1]
     optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=0.0005)
     criterion = nn.CrossEntropyLoss().to(args.device)
@@ -503,15 +503,26 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args):
 
     start = time.time()
     for ep in range(Epoch + 1):
-        loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, aug=True)
+        # loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, aug=True)
+        loss_train, acc_train = epoch(
+            'train', trainloader, net, optimizer, criterion,
+                                      args.device,  # 传入正确的 device
+                                      aug=True,  # 评估训练时启用增强
+                                      dc_aug_param=args.dc_aug_param)  # 传入增强参数字典
         if ep in lr_schedule:
             lr *= 0.1
             optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=0.0005)
 
     time_train = time.time() - start
-    loss_test, acc_test = epoch('test', testloader, net, optimizer, criterion, args, aug=False)
-    logger.success('%s Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
-        get_time(), it_eval, Epoch, int(time_train), loss_train, acc_train, acc_test))
+    # loss_test, acc_test = epoch('test', testloader, net, optimizer, criterion, args, aug=False)
+    loss_test, acc_test = epoch('test', testloader, net, optimizer, criterion,
+                                args.device,  # 传入正确的 device
+                                aug=False,  # 测试时不使用增强
+                                dc_aug_param=None)  # 测试时不使用增强参数
+    logger.info(
+        '%s Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
+            it_eval, Epoch, int(time_train), loss_train, acc_train, acc_test)
+    )
 
     return net, acc_train, acc_test
 
@@ -635,6 +646,8 @@ def setup_logger(log_dir="logs", log_level="INFO"):
 
     _logger_configured = True  # 标记为已配置
     logger.info(f"Loguru 日志记录器配置完成。日志级别: {log_level.upper()}。将输出到控制台和 '{log_dir}' 目录下的文件。")
+
+
 # --- 日志配置函数结束 ---
 
 # --- 配置加载部分开始 ---
@@ -648,7 +661,7 @@ def load_config(config_path="config.yaml"):
     Returns:
         dict: 包含配置参数的字典。如果文件不存在或解析失败，则返回 None。
     """
-    resolved_path = os.path.abspath(config_path) # 获取绝对路径，方便日志记录
+    resolved_path = os.path.abspath(config_path)  # 获取绝对路径，方便日志记录
     logger.info(f"尝试从 '{resolved_path}' 加载配置...")
 
     if not os.path.exists(resolved_path):
@@ -657,7 +670,7 @@ def load_config(config_path="config.yaml"):
 
     try:
         with open(resolved_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) # 使用 safe_load 防止执行任意代码
+            config = yaml.safe_load(f)  # 使用 safe_load 防止执行任意代码
         logger.success(f"成功加载配置文件: {resolved_path}")
         # 使用 DEBUG 级别选择性地打印加载的配置内容
         logger.debug(f"加载的配置内容: {config}")
@@ -668,6 +681,7 @@ def load_config(config_path="config.yaml"):
     except Exception as e:
         logger.error(f"加载配置文件时发生未知错误: {resolved_path}\n错误详情: {e}")
         return None
+
 
 class ConfigNamespace:
     def __init__(self, config_dict):
