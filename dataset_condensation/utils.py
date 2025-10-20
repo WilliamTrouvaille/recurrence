@@ -520,7 +520,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args):
                                 aug=False,  # 测试时不使用增强
                                 dc_aug_param=None)  # 测试时不使用增强参数
     logger.info(
-        '%s Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
+        'Evaluate_%02d: epoch = %04d train time = %d s train loss = %.6f train acc = %.4f, test acc = %.4f' % (
             it_eval, Epoch, int(time_train), loss_train, acc_train, acc_test)
     )
 

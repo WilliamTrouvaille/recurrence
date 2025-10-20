@@ -196,12 +196,25 @@ def main():
         # dtype=torch.long 指定标签类型为长整型
         # requires_grad=False 表明标签是固定的，不需要优化
         # .view(-1) 将形状从 [num_classes, ipc] 展平成 [num_classes * ipc]
-        label_syn = torch.tensor(
-            [np.ones(args.ipc) * i for i in range(num_classes)],
-            dtype=torch.long,
-            requires_grad=False,
-            device=args.device
-        ).view(-1)
+        # label_syn = torch.tensor(
+        #     [np.ones(args.ipc) * i for i in range(num_classes)],
+        #     dtype=torch.long,
+        #     requires_grad=False,
+        #     device=args.device
+        # ).view(-1)
+
+        # 创建合成图像对应的标签张量
+        # 例如 ipc=10, num_classes=10 -> 生成 [[0,0,...,0], [1,1,...,1], ..., [9,9,...,9]]
+        # 先创建一个 NumPy 数组的列表
+        label_list_np = [np.ones(args.ipc) * i for i in range(num_classes)]
+        # 将 NumPy 数组列表 转换为 单一的 NumPy 数组
+        label_array_np = np.array(label_list_np, dtype=np.int64) # 指定 NumPy 的数据类型为整数
+        # 从 单一的 NumPy 数组 创建 Tensor
+        label_syn = torch.from_numpy(label_array_np).to(dtype=torch.long, device=args.device) # 使用 from_numpy 更高效，并指定最终类型和设备
+        # .view(-1) 将形状从 [num_classes, ipc] 展平成 [num_classes * ipc]
+        label_syn = label_syn.view(-1)
+        # 确保标签不需要梯度
+        label_syn.requires_grad_(False)
 
         # 根据配置决定初始化方式 ('noise' 或 'real')
         if args.init == 'real':
