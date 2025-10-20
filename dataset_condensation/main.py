@@ -17,7 +17,8 @@ from torchvision.utils import save_image
 
 from utils import (
     load_config, setup_logger, get_loops, get_dataset,
-    get_eval_pool, get_time, ConfigNamespace, get_network, evaluate_synset, match_loss, epoch, TensorDataset
+    get_eval_pool, get_time, ConfigNamespace, get_network, evaluate_synset, match_loss, epoch, TensorDataset,
+    load_checkpoint, save_checkpoint
 )
 from loguru import logger
 
@@ -177,19 +178,61 @@ def main():
                 f' std = {torch.std(images_all[:, ch]):.4f}'
             )
 
+        # 尝试加载检查点
+        checkpoint_path_dir = args.checkpoint_path if hasattr(args, 'checkpoint_path') else 'checkpoints'
+        checkpoint = load_checkpoint(checkpoint_path_dir, args)
+
+        if checkpoint is not None and checkpoint['exp'] == exp:
+            # 恢复训练状态
+            logger.info(f"从检查点恢复训练: 实验 {checkpoint['exp']}, 迭代 {checkpoint['iteration']}")
+            start_iteration = checkpoint['iteration'] + 1
+            image_syn = checkpoint['image_syn'].to(args.device).requires_grad_(True)
+            label_syn = checkpoint['label_syn'].to(args.device)
+            accs_all_exps = checkpoint['accs_all_exps']
+            data_save = checkpoint['data_save']
+        else:
+            # 从头开始训练
+            start_iteration = 0
+
         ''' initialize the synthetic data (初始化合成数据) '''
-        # 创建合成图像张量
-        # 大小为 (类别数 * 每类图像数, 通道数, 高, 宽)
-        # 初始化为标准正态分布的随机噪声
-        # dtype=torch.float 指定数据类型
-        # requires_grad=True 表明这个张量是需要计算梯度的，是我们要优化的目标
-        # device=args.device 指定存储在哪个设备上
-        image_syn = torch.randn(
-            size=(num_classes * args.ipc, channel, im_size[0], im_size[1]),
-            dtype=torch.float,
-            requires_grad=True,
-            device=args.device
-        )
+        if checkpoint is None or checkpoint['exp'] != exp:# 仅在没有检查点或实验不匹配时初始化
+
+            # 创建合成图像张量
+            # 大小为 (类别数 * 每类图像数, 通道数, 高, 宽)
+            # 初始化为标准正态分布的随机噪声
+            # dtype=torch.float 指定数据类型
+            # requires_grad=True 表明这个张量是需要计算梯度的，是我们要优化的目标
+            # device=args.device 指定存储在哪个设备上
+            image_syn = torch.randn(
+                size=(num_classes * args.ipc, channel, im_size[0], im_size[1]),
+                dtype=torch.float,
+                requires_grad=True,
+                device=args.device
+            )
+
+            # 创建合成图像对应的标签张量
+            # 例如 ipc=10, num_classes=10 -> 生成 [[0,0,...,0], [1,1,...,1], ..., [9,9,...,9]]
+            # 先创建一个 NumPy 数组的列表
+            label_list_np = [np.ones(args.ipc) * i for i in range(num_classes)]
+            # 将 NumPy 数组列表 转换为 单一的 NumPy 数组
+            label_array_np = np.array(label_list_np, dtype=np.int64) # 指定 NumPy 的数据类型为整数
+            # 从 单一的 NumPy 数组 创建 Tensor
+            label_syn = torch.from_numpy(label_array_np).to(dtype=torch.long, device=args.device) # 使用 from_numpy 更高效，并指定最终类型和设备
+            # .view(-1) 将形状从 [num_classes, ipc] 展平成 [num_classes * ipc]
+            label_syn = label_syn.view(-1)
+            # 确保标签不需要梯度
+            label_syn.requires_grad_(False)
+
+            if args.init == 'real':
+                logger.info('从随机抽取的真实图像初始化合成数据')
+                for c in range(num_classes):
+                    start_idx = c * args.ipc
+                    end_idx = (c + 1) * args.ipc
+                    real_images_subset = get_images(c, args.ipc)
+                    image_syn.data[start_idx:end_idx] = real_images_subset.detach().data
+            else:
+                logger.info('从随机高斯噪声初始化合成数据')
+
 
         # 创建合成图像对应的标签张量
         # 例如 ipc=3, num_classes=10 -> 生成 [[0,0,0], [1,1,1], ..., [9,9,9]]
@@ -203,33 +246,33 @@ def main():
         #     device=args.device
         # ).view(-1)
 
-        # 创建合成图像对应的标签张量
-        # 例如 ipc=10, num_classes=10 -> 生成 [[0,0,...,0], [1,1,...,1], ..., [9,9,...,9]]
-        # 先创建一个 NumPy 数组的列表
-        label_list_np = [np.ones(args.ipc) * i for i in range(num_classes)]
-        # 将 NumPy 数组列表 转换为 单一的 NumPy 数组
-        label_array_np = np.array(label_list_np, dtype=np.int64) # 指定 NumPy 的数据类型为整数
-        # 从 单一的 NumPy 数组 创建 Tensor
-        label_syn = torch.from_numpy(label_array_np).to(dtype=torch.long, device=args.device) # 使用 from_numpy 更高效，并指定最终类型和设备
-        # .view(-1) 将形状从 [num_classes, ipc] 展平成 [num_classes * ipc]
-        label_syn = label_syn.view(-1)
-        # 确保标签不需要梯度
-        label_syn.requires_grad_(False)
+        # # 创建合成图像对应的标签张量
+        # # 例如 ipc=10, num_classes=10 -> 生成 [[0,0,...,0], [1,1,...,1], ..., [9,9,...,9]]
+        # # 先创建一个 NumPy 数组的列表
+        # label_list_np = [np.ones(args.ipc) * i for i in range(num_classes)]
+        # # 将 NumPy 数组列表 转换为 单一的 NumPy 数组
+        # label_array_np = np.array(label_list_np, dtype=np.int64) # 指定 NumPy 的数据类型为整数
+        # # 从 单一的 NumPy 数组 创建 Tensor
+        # label_syn = torch.from_numpy(label_array_np).to(dtype=torch.long, device=args.device) # 使用 from_numpy 更高效，并指定最终类型和设备
+        # # .view(-1) 将形状从 [num_classes, ipc] 展平成 [num_classes * ipc]
+        # label_syn = label_syn.view(-1)
+        # # 确保标签不需要梯度
+        # label_syn.requires_grad_(False)
 
-        # 根据配置决定初始化方式 ('noise' 或 'real')
-        if args.init == 'real':
-            logger.info('从随机抽取的真实图像初始化合成数据')
-            # 遍历每个类别
-            for c in range(num_classes):
-                # 获取该类别在 image_syn 中的切片范围
-                start_idx = c * args.ipc
-                end_idx = (c + 1) * args.ipc
-                # 从真实数据中随机抽取 ipc 张该类别的图像
-                real_images_subset = get_images(c, args.ipc)
-                # 将抽取的真实图像数据 (去除梯度信息 .detach()) 复制到 image_syn 对应位置
-                image_syn.data[start_idx:end_idx] = real_images_subset.detach().data
-        else:  # 默认 'noise'
-            logger.info('从随机高斯噪声初始化合成数据')
+        # # 根据配置决定初始化方式 ('noise' 或 'real')
+        # if args.init == 'real':
+        #     logger.info('从随机抽取的真实图像初始化合成数据')
+        #     # 遍历每个类别
+        #     for c in range(num_classes):
+        #         # 获取该类别在 image_syn 中的切片范围
+        #         start_idx = c * args.ipc
+        #         end_idx = (c + 1) * args.ipc
+        #         # 从真实数据中随机抽取 ipc 张该类别的图像
+        #         real_images_subset = get_images(c, args.ipc)
+        #         # 将抽取的真实图像数据 (去除梯度信息 .detach()) 复制到 image_syn 对应位置
+        #         image_syn.data[start_idx:end_idx] = real_images_subset.detach().data
+        # else:  # 默认 'noise'
+        #     logger.info('从随机高斯噪声初始化合成数据')
 
         ''' training setup (训练设置) '''
         # 定义用于优化合成图像 image_syn 的优化器
@@ -249,7 +292,7 @@ def main():
         # ==========================================================
 
         # 主蒸馏循环，对应 Algorithm 1 的 t 循环
-        for it in range(args.Iteration + 1): # 迭代次数由配置文件中的 training.iterations 定义
+        for it in range(start_iteration,args.Iteration + 1): # 迭代次数由配置文件中的 training.iterations 定义
 
             # --- 4.2.1: 定期评估合成数据质量 ---
             # 检查当前迭代次数 it 是否在预定义的评估点列表 eval_it_pool 中
@@ -457,6 +500,14 @@ def main():
             if it % 10 == 0:
                 # 使用 logger 记录损失信息，包含时间戳
                 logger.info(f"{get_time()} iter = {it:04d}, loss = {loss_avg:.4f}")
+
+            # 定期保存检查点
+            checkpoint_interval = args.checkpoint_interval if hasattr(args, 'checkpoint_interval') else 100
+            if it > 0 and it % checkpoint_interval == 0:
+                save_checkpoint(
+                    checkpoint_path_dir, exp, it, image_syn, label_syn,
+                    optimizer_img, accs_all_exps, data_save, args
+                )
 
             # --- 在最后一次迭代 (it == args.Iteration) 保存最终结果 ---
             if it == args.Iteration: # only record the final results

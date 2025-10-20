@@ -10,4 +10,5 @@ dependencies = [
     "pyyaml>=6.0.3",
     "scipy>=1.16.2",
     "scipy-stubs==1.16.2.4",
+    "tqdm>=4.67.1",
 ]

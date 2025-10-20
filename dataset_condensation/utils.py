@@ -19,6 +19,7 @@ from loguru import logger
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
+from tqdm import tqdm
 
 from networks import ConvNet, LeNet
 
@@ -376,6 +377,8 @@ def epoch(mode, dataloader, net, optimizer, criterion, device, aug, dc_aug_param
     else:
         net.eval()  # 禁用 Dropout, 固定 BatchNorm 统计量
 
+    pbar = tqdm(dataloader, desc=f'{mode.capitalize()}', leave=False, ncols=100)
+
     # 3. 遍历数据加载器中的所有批次
     for i_batch, datum in enumerate(dataloader):
         # 3a. 获取数据和标签，并移到设备
@@ -417,6 +420,12 @@ def epoch(mode, dataloader, net, optimizer, criterion, device, aug, dc_aug_param
             optimizer.zero_grad()  # 清空梯度
             loss.backward()  # 计算梯度
             optimizer.step()  # 更新权重
+
+        # 更新进度条显示的信息
+        pbar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'acc': f'{acc / n_b:.4f}'
+        })
 
     # 4. 计算整个 epoch 的平均损失和准确率
     loss_avg /= num_exp
@@ -506,9 +515,9 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args):
         # loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, aug=True)
         loss_train, acc_train = epoch(
             'train', trainloader, net, optimizer, criterion,
-                                      args.device,  # 传入正确的 device
-                                      aug=True,  # 评估训练时启用增强
-                                      dc_aug_param=args.dc_aug_param)  # 传入增强参数字典
+            args.device,  # 传入正确的 device
+            aug=True,  # 评估训练时启用增强
+            dc_aug_param=args.dc_aug_param)  # 传入增强参数字典
         if ep in lr_schedule:
             lr *= 0.1
             optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=0.0005)
@@ -693,4 +702,77 @@ class ConfigNamespace:
         # 定义对象的打印形式，方便日志记录
         return str(vars(self))
 
+
 # --- 配置加载部分结束 ---
+
+# --- 训练存档部分开始 ---
+def save_checkpoint(checkpoint_path, exp, it, image_syn, label_syn, optimizer_img,
+                    accs_all_exps, data_save, args):
+    """
+    保存训练检查点。
+
+    参数:
+        checkpoint_path (str): 检查点保存路径
+        exp (int): 当前实验编号
+        it (int): 当前迭代次数
+        image_syn (Tensor): 当前合成图像
+        label_syn (Tensor): 当前合成标签
+        optimizer_img (Optimizer): 图像优化器
+        accs_all_exps (dict): 所有实验的准确率记录
+        data_save (list): 保存的数据列表
+        args (ConfigNamespace): 配置参数
+    """
+    os.makedirs(checkpoint_path, exist_ok=True)
+
+    checkpoint_file = os.path.join(
+        checkpoint_path,
+        f'checkpoint_{args.method}_{args.dataset}_{args.model}_{args.ipc}ipc_exp{exp}_iter{it}.pt'
+    )
+
+    checkpoint = {
+        'exp': exp,
+        'iteration': it,
+        'image_syn': image_syn.detach().cpu(),
+        'label_syn': label_syn.detach().cpu(),
+        'optimizer_img_state': optimizer_img.state_dict(),
+        'accs_all_exps': accs_all_exps,
+        'data_save': data_save,
+        'args': vars(args)
+    }
+
+    torch.save(checkpoint, checkpoint_file)
+    logger.info(f"检查点已保存至: {checkpoint_file}")
+
+
+def load_checkpoint(checkpoint_path, args):
+    """
+    加载最新的训练检查点。
+
+    参数:
+        checkpoint_path (str): 检查点保存路径
+        args (ConfigNamespace): 配置参数
+
+    返回:
+        checkpoint (dict or None): 检查点字典，如果不存在则返回None
+    """
+    if not os.path.exists(checkpoint_path):
+        logger.info(f"检查点目录不存在: {checkpoint_path}")
+        return None
+
+    # 查找所有匹配的检查点文件
+    pattern = f'checkpoint_{args.method}_{args.dataset}_{args.model}_{args.ipc}ipc_*.pt'
+    checkpoint_files = [f for f in os.listdir(checkpoint_path) if f.startswith('checkpoint_') and f.endswith('.pt')]
+
+    if not checkpoint_files:
+        logger.info("未找到检查点文件，将从头开始训练")
+        return None
+
+    # 获取最新的检查点
+    checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_path, x)), reverse=True)
+    latest_checkpoint = os.path.join(checkpoint_path, checkpoint_files[0])
+
+    logger.info(f"加载检查点: {latest_checkpoint}")
+    checkpoint = torch.load(latest_checkpoint, map_location='cpu')
+
+    return checkpoint
+# --- 训练存档部分开始 ---

@@ -3,7 +3,7 @@ dataset: MNIST      # 数据集: MNIST, FashionMNIST, SVHN, CIFAR10, CIFAR100
 model: LeNet        # 用于蒸馏和评估的模型: MLP, ConvNet, LeNet, AlexNet, VGG11, ResNet18
 ipc: 10             # 每类合成图像数
 eval_mode: S        # 评估模式: S (self), M (multi-arch), W, D, A, P, N
-num_exp: 5          # 独立实验次数
+num_exp: 1          # 独立实验次数
 num_eval: 20        # 每次评估时训练模型的数量
 epoch_eval_train: 300 # 评估时每个模型的训练周期数
 Iteration: 1000     # 蒸馏总迭代次数
@@ -16,6 +16,9 @@ dsa_strategy: None  # DSA 策略 (DC 方法下应为 None)
 data_path: data     # 数据集存储路径
 save_path: result   # 结果保存路径
 dis_metric: ours    # 梯度距离度量: ours, mse, cos
+
+checkpoint_path: checkpoints  # 检查点保存路径
+checkpoint_interval: 100      # 每隔多少次迭代保存一次检查点
 
 # DC 方法在评估时使用的 (不可微) 数据增强参数
 dc_augmentation:
