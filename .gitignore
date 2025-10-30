@@ -11,6 +11,8 @@
 */data/*
 **.log
 
+/.claude
+**CLAUDE**
 
 # Virtual environments
 .venv
